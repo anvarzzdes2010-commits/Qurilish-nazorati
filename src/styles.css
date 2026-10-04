@@ -1,0 +1,180 @@
+import { useEffect, useMemo, useState } from 'react';
+
+const API = '/api';
+
+function App() {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [projects, setProjects] = useState([]);
+  const [items, setItems] = useState([]);
+  const [reports, setReports] = useState([]);
+  const [notifications, setNotifications] = useState([]);
+  const [analytics, setAnalytics] = useState({});
+
+  const [form, setForm] = useState({ username: '', password: '' });
+
+  async function apiFetch(url, options = {}) {
+    const res = await fetch(`${API}${url}`, {
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+      ...options,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Xatolik');
+    return data;
+  }
+
+  async function loadData() {
+    try {
+      const [projectsRes, notifRes, analyticsRes, reportsRes] = await Promise.all([
+        apiFetch('/projects'),
+        apiFetch('/notifications'),
+        apiFetch('/analytics'),
+        apiFetch('/reports'),
+      ]);
+
+      setProjects(projectsRes || []);
+      setNotifications(notifRes || []);
+      setAnalytics(analyticsRes || {});
+      setReports(reportsRes || []);
+
+      const allItems = [];
+      for (const project of projectsRes || []) {
+        const est = await apiFetch(`/estimates/${project.id}`);
+        allItems.push(...(est || []));
+      }
+      setItems(allItems);
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  useEffect(() => {
+    apiFetch('/auth/me')
+      .then((data) => {
+        setUser(data);
+        return loadData();
+      })
+      .catch(() => setUser(null))
+      .finally(() => setLoading(false));
+  }, []);
+
+  async function login(e) {
+    e.preventDefault();
+    try {
+      const data = await apiFetch('/auth/login', {
+        method: 'POST',
+        body: JSON.stringify(form),
+      });
+      setUser(data.user);
+      setForm({ username: '', password: '' });
+      await loadData();
+    } catch (err) {
+      alert(err.message);
+    }
+  }
+
+  async function logout() {
+    await apiFetch('/auth/logout', { method: 'POST' });
+    setUser(null);
+  }
+
+  const isRahbar = user?.role === 'RAHBAR';
+  const isPrarab = user?.role === 'PRARAB';
+  const isPto = user?.role === 'PTO';
+
+  if (loading) return <div className="app-shell"><h1>Yuklanmoqda...</h1></div>;
+
+  if (!user) {
+    return (
+      <div className="auth-shell">
+        <div className="auth-card">
+          <div className="brand-row">
+            <div className="brand-logo">Q</div>
+            <div>
+              <h1>Qurilish Nazorati</h1>
+              <p>Qurilish boshqaruvi tizimi</p>
+            </div>
+          </div>
+
+          <form onSubmit={login} className="auth-form">
+            <label>
+              Username
+              <input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
+            </label>
+            <label>
+              Parol
+              <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+            </label>
+            <button type="submit">Kirish</button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="app-shell">
+      <header className="topbar">
+        <div>
+          <strong>{user.full_name}</strong>
+          <small>{user.role}</small>
+        </div>
+        <button onClick={logout}>Chiqish</button>
+      </header>
+
+      <main className="content-grid">
+        <aside className="panel stats-panel">
+          <h3>Umumiy ko\'rsatkichlar</h3>
+          <div className="stat-grid">
+            <div className="stat-box"><span>Umumiy summa</span><strong>{Number(analytics.totalEstimateAmount || 0).toLocaleString()} so\'m</strong></div>
+            <div className="stat-box"><span>Rejalashtirilgan</span><strong>{analytics.totalPlannedQuantities || 0}</strong></div>
+            <div className="stat-box"><span>Tasdiqlangan</span><strong>{analytics.totalApprovedQuantities || 0}</strong></div>
+            <div className="stat-box"><span>Qolgan</span><strong>{analytics.remainingQuantities || 0}</strong></div>
+          </div>
+        </aside>
+
+        <section className="panel">
+          <h3>Loyiha va hisobotlar</h3>
+          <div className="list-block">
+            {projects.length === 0 ? <p>Hozircha loyiha yo\'q</p> : projects.map((project) => (
+              <div key={project.id} className="project-card">
+                <h4>{project.name}</h4>
+                <p>{project.address}</p>
+                <small>{project.description}</small>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel">
+          <h3>Hisobotlar</h3>
+          <div className="list-block">
+            {reports.length === 0 ? <p>Hisobotlar yo\'q</p> : reports.map((r) => (
+              <div key={r.id} className="report-card">
+                <div className="row"><strong>{r.report_type}</strong><span className="badge">{r.status}</span></div>
+                <p>{r.description}</p>
+                <small>{r.quantity} birlik</small>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel">
+          <h3>Xabarlar</h3>
+          <div className="list-block">
+            {notifications.length === 0 ? <p>Xabarlar yo\'q</p> : notifications.map((n) => (
+              <div key={n.id} className="notif-card">
+                <strong>{n.title}</strong>
+                <p>{n.body}</p>
+                <small>{n.created_at}</small>
+              </div>
+            ))}
+          </div>
+        </section>
+      </main>
+    </div>
+  );
+}
+
+export default App;

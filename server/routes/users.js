@@ -1,125 +1,83 @@
 import express from 'express';
+import { authenticateUser, createSession, hashPassword, invalidateSession } from '../auth/auth.js';
+import { authMiddleware } from '../middleware/auth.js';
 import { getDatabase } from '../db/init.js';
-import { authMiddleware, requireRole } from '../middleware/auth.js';
 import { logAudit } from '../middleware/audit.js';
-import { hashPassword } from '../auth/auth.js';
 
 const router = express.Router();
 
-// Create user (Rahbar only)
-router.post('/', authMiddleware, requireRole('RAHBAR'), (req, res) => {
+router.post('/login', (req, res) => {
   try {
-    const { username, password, full_name, role } = req.body;
-    
-    if (!username || !password || !full_name || !role) {
-      return res.status(400).json({ error: 'Barcha maydonlar talab qilinadi' });
+    const { username, password } = req.body || {};
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Foydalanuvchi nomi va parol kerak' });
     }
-    
-    if (!['PRARAB', 'PTO'].includes(role)) {
-      return res.status(400).json({ error: 'Noto\'g\'ri rol' });
+
+    const user = authenticateUser(username, password);
+    if (!user) {
+      logAudit(0, 'LOGIN_FAILED', 'USER', null, username);
+      return res.status(401).json({ error: 'Login yoki parol noto\'g\'ri' });
     }
-    
-    const db = getDatabase();
-    
-    // Check if username exists
-    const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
-    if (existing) {
-      db.close();
-      return res.status(409).json({ error: 'Bu foydalanuvchi nomi allaqachon mavjud' });
-    }
-    
-    const passwordHash = hashPassword(password);
-    const stmt = db.prepare(`
-      INSERT INTO users (username, password_hash, full_name, role)
-      VALUES (?, ?, ?, ?)
-    `);
-    
-    const result = stmt.run(username, passwordHash, full_name, role);
-    db.close();
-    
-    logAudit(req.user.id, 'CREATE_USER', 'USER', result.lastInsertRowid, `role: ${role}`);
-    
-    res.status(201).json({
-      id: result.lastInsertRowid,
-      username,
-      full_name,
-      role
+
+    const token = createSession(user.id);
+    res.cookie('session_token', token, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
     });
-  } catch (err) {
-    console.error('Create user error:', err);
+
+    logAudit(user.id, 'LOGIN', 'USER', user.id, 'Success');
+    res.json({
+      token,
+      user: {
+        id: user.id,
+        username: user.username,
+        full_name: user.full_name,
+        role: user.role,
+      }
+    });
+  } catch (error) {
+    console.error('Login error:', error);
     res.status(500).json({ error: 'Server xatosi' });
   }
 });
 
-// Get all users (Rahbar only)
-router.get('/', authMiddleware, requireRole('RAHBAR'), (req, res) => {
-  try {
-    const db = getDatabase();
-    const users = db.prepare(`
-      SELECT id, username, full_name, role, is_active, created_at FROM users
-      ORDER BY created_at DESC
-    `).all();
-    db.close();
-    
-    res.json(users);
-  } catch (err) {
-    console.error('Get users error:', err);
-    res.status(500).json({ error: 'Server xatosi' });
-  }
+router.get('/me', authMiddleware, (req, res) => {
+  res.json({
+    id: req.user.id,
+    username: req.user.username,
+    full_name: req.user.full_name,
+    role: req.user.role,
+  });
 });
 
-// Deactivate user (Rahbar only)
-router.patch('/:id/deactivate', authMiddleware, requireRole('RAHBAR'), (req, res) => {
-  try {
-    const { id } = req.params;
-    
-    const db = getDatabase();
-    db.prepare('UPDATE users SET is_active = 0 WHERE id = ?').run(id);
-    db.close();
-    
-    logAudit(req.user.id, 'DEACTIVATE_USER', 'USER', parseInt(id));
-    
-    res.json({ message: 'Foydalanuvchi bekor qilindi' });
-  } catch (err) {
-    console.error('Deactivate user error:', err);
-    res.status(500).json({ error: 'Server xatosi' });
-  }
+router.post('/logout', authMiddleware, (req, res) => {
+  const token = req.cookies?.session_token || req.headers.authorization?.replace('Bearer ', '');
+  if (token) invalidateSession(token);
+  res.clearCookie('session_token');
+  logAudit(req.user.id, 'LOGOUT', 'USER', req.user.id, 'logout');
+  res.json({ message: 'Tizimdan chiqildi' });
 });
 
-// Get Prarab users (for assignment)
-router.get('/role/PRARAB', authMiddleware, requireRole('RAHBAR'), (req, res) => {
-  try {
-    const db = getDatabase();
-    const users = db.prepare(`
-      SELECT id, username, full_name FROM users
-      WHERE role = 'PRARAB' AND is_active = 1
-      ORDER BY full_name
-    `).all();
-    db.close();
-    
-    res.json(users);
-  } catch (err) {
-    console.error('Get Prarab users error:', err);
-    res.status(500).json({ error: 'Server xatosi' });
+router.post('/setup-admin', (req, res) => {
+  const { username, password, full_name } = req.body || {};
+  if (!username || !password || !full_name) {
+    return res.status(400).json({ error: 'username, password, full_name talab qilinadi' });
   }
-});
 
-// Get PTO users (for assignment)
-router.get('/role/PTO', authMiddleware, requireRole('RAHBAR'), (req, res) => {
-  try {
-    const db = getDatabase();
-    const users = db.prepare(`
-      SELECT id, username, full_name FROM users
-      WHERE role = 'PTO' AND is_active = 1
-      ORDER BY full_name
-    `).all();
+  const db = getDatabase();
+  const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
+  if (existing) {
     db.close();
-    
-    res.json(users);
-  } catch (err) {
-    console.error('Get PTO users error:', err);
-    res.status(500).json({ error: 'Server xatosi' });
+    return res.status(409).json({ error: 'Bu username mavjud' });
   }
+
+  const hash = hashPassword(password);
+  const row = db.prepare('INSERT INTO users (username, password_hash, full_name, role, is_active) VALUES (?, ?, ?, ?, 1)').run(username, hash, full_name, 'RAHBAR');
+  db.close();
+  logAudit(row.lastInsertRowid, 'SETUP_ADMIN', 'USER', row.lastInsertRowid, 'Administrator yaratildi');
+  res.status(201).json({ message: 'Rahbar yaratildi' });
 });
 
 export default router;

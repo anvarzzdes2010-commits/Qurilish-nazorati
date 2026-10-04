@@ -1,37 +1,39 @@
-import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { getDatabase } from './init.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+export function ensureDirs() {
+  const dirs = [
+    path.join(process.cwd(), 'uploads'),
+    path.join(process.cwd(), 'uploads', 'estimates'),
+    path.join(process.cwd(), 'uploads', 'photos'),
+    path.join(process.cwd(), 'data'),
+  ];
 
-const DB_PATH = process.env.DB_PATH || path.join(process.cwd(), 'data', 'qurilish.db');
-
-// Ensure data directory exists
-const dataDir = path.dirname(DB_PATH);
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
+  dirs.forEach((dir) => {
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  });
 }
 
-export function initializeDatabase() {
-  const db = new Database(DB_PATH);
-  
-  // Enable foreign keys
-  db.pragma('foreign_keys = ON');
-  
-  // Read and execute schema
-  const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf-8');
-  db.exec(schema);
-  
-  console.log(`✓ Database initialized at ${DB_PATH}`);
-  return db;
-}
+export function seedAdminIfNeeded() {
+  const db = getDatabase();
+  const count = db.prepare('SELECT COUNT(*) as c FROM users').get().c;
+  db.close();
 
-export function getDatabase() {
-  const db = new Database(DB_PATH);
-  db.pragma('foreign_keys = ON');
-  return db;
-}
+  if (count > 0) return;
 
-export default { initializeDatabase, getDatabase };
+  const adminUser = process.env.ADMIN_USERNAME || 'rahbar';
+  const adminPassword = process.env.ADMIN_PASSWORD || 'Rahbar123!';
+
+  const bcrypt = await import('bcryptjs');
+  const hash = bcrypt.default.hashSync(adminPassword, 10);
+
+  const db2 = getDatabase();
+  db2.prepare(`
+    INSERT INTO users (username, password_hash, full_name, role, is_active)
+    VALUES (?, ?, ?, 'RAHBAR', 1)
+  `).run(adminUser, hash, 'Bosh Rahbar');
+  db2.close();
+
+  console.log(`Administrator yaratildi. Login: ${adminUser} / ${adminPassword}`);
+}

@@ -1,14 +1,26 @@
-import { getDatabase } from '../db/init.js';
+import { getSessionUser } from '../auth/auth.js';
 
-export function logAudit(userId, action, entityType = null, entityId = null, details = null) {
-  try {
-    const db = getDatabase();
-    db.prepare(`
-      INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(userId, action, entityType, entityId, details);
-    db.close();
-  } catch (err) {
-    console.error('Audit log error:', err);
+export function authMiddleware(req, res, next) {
+  const authHeader = req.headers.authorization || '';
+  const token = req.cookies?.session_token || (authHeader.startsWith('Bearer ') ? authHeader.replace('Bearer ', '') : null);
+
+  if (!token) {
+    return res.status(401).json({ error: 'Sessiya topilmadi' });
   }
+
+  const user = getSessionUser(token);
+  if (!user) {
+    return res.status(401).json({ error: 'Sessiya muddati tugagan' });
+  }
+
+  req.user = user;
+  next();
+}
+
+export function requireRole(...roles) {
+  return (req, res, next) => {
+    if (!req.user) return res.status(401).json({ error: 'Autentifikatsiya zarur' });
+    if (!roles.includes(req.user.role)) return res.status(403).json({ error: 'Ruxsat yo\'q' });
+    next();
+  };
 }
